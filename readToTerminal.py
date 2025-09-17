@@ -1,5 +1,7 @@
-
+import json
 import time
+import datetime
+import csv
 from smbus2 import SMBus, i2c_msg
 
 DEVICE_BUS = 1
@@ -38,8 +40,29 @@ for i in range(1000):
 
     voc = (msg.buf[18][0] << 8 | msg.buf[19][0]) / 10
     nox = (msg.buf[21][0] << 8 | msg.buf[22][0]) / 10
-
+    
+    now_time = datetime.datetime.now()
+    data_time = str(now_time.month) + "/" + str(now_time.day) + "::" + str(now_time.hour) + ":" + str(now_time.minute)
+    data = {
+        "time" : data_time,
+        "pm1p0" : pm1p0,
+        "pm2p5" : pm2p5,
+        "pm4p0" : pm4p0,
+        "pm10p0" : pm10p0,
+        "temperature" : temperature,
+        "humidity" : humidity,
+        "voc" : voc,
+        "nox" : nox
+        }
+        
+    with open('bee_data.csv', 'a', newline='') as csvfile:
+        fieldnames = ["time", "pm1p0", "pm2p5", "pm4p0", "pm10p0", "temperature", "humidity", "voc", "nox"]
+        writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
+        writer.writerow(data)
+    with open("bee_data.jl", "a") as f:
+        f.write(json.dumps(data) + "\n")
     print("{:.2f} \t {:.2f} \t {:.2f} \t {:.2f} \t {:.0f} \t {:.0f} \t {:.2f} \t\t {:.2f}".format(pm1p0, pm2p5, pm4p0, pm10p0, voc, nox, temperature, humidity))
+
 
     time.sleep(2)
 
