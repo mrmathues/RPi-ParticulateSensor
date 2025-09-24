@@ -3,6 +3,8 @@
 import time
 import json
 from smbus2 import SMBus, i2c_msg
+from notecard import notecard
+from periphery import Serial
 
 # I2C bus 1 on a Raspberry Pi 3B+
 # SDA on GPIO2=Pin3 and SCL on GPIO3=Pin5
@@ -14,6 +16,16 @@ DEVICE_ADDR = 0x69
 
 # init I2C
 bus = SMBus(DEVICE_BUS)
+
+# Initialize Notecard via Serial
+serial_port = "/dev/ttyACM0"  # Replace with the correct serial port for your setup
+baud_rate = 9600
+serial = Serial(serial_port, baudrate=baud_rate)
+card = notecard.OpenSerial(serial)
+
+# Configure Notecard for WiFi and NoteHub
+card.Transaction({"req": "hub.set", "product": "your.product.uid", "mode": "periodic"})
+card.Transaction({"req": "card.wifi", "ssid": "your_wifi_ssid", "password": "your_wifi_password"})
 
 # wait 1 s for sensor start up (> 1000 ms according to datasheet)
 time.sleep(1)
@@ -31,6 +43,9 @@ print("pm1p0 \t pm2p5 \t pm4p0 \t pm10p0\t voc \t nox \t temperature\t humidity"
 data_list = []
 num_measurements = 1000
 json_filename = "sensor_data.json"
+
+# Send data to NoteHub every 10 minutes
+send_interval = 10 * 60  # 10 minutes in seconds
 
 for i in range(num_measurements):
     msg = i2c_msg.write(DEVICE_ADDR, [0x03, 0xC4])
@@ -70,6 +85,12 @@ for i in range(num_measurements):
     # Write to JSON file after each measurement
     with open(json_filename, "w") as f:
         json.dump(data_list, f, indent=2)
+
+    # Send data to NoteHub every 10 minutes
+    if i % (send_interval // 10) == 0:  # Assuming measurements are taken every 10 seconds
+        with open(json_filename, "r") as f:
+            json_data = f.read()
+        card.Transaction({"req": "note.add", "file": "sensor.qo", "body": json.loads(json_data)})
 
     # wait 10 s for next measurement
     time.sleep(10)
