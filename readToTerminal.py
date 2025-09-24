@@ -1,27 +1,42 @@
-import json
+# - Run the example 'python3 SCD4x_I2C_PYTHON_minmal_example.py'
+
 import time
-import datetime
-import csv
+import json
 from smbus2 import SMBus, i2c_msg
 
+# I2C bus 1 on a Raspberry Pi 3B+
+# SDA on GPIO2=Pin3 and SCL on GPIO3=Pin5
+# sensor +3.3V at Pin1 and GND at Pin6
 DEVICE_BUS = 1
 
+# device address SCD4x
 DEVICE_ADDR = 0x69
 
+# init I2C
 bus = SMBus(DEVICE_BUS)
 
+# wait 1 s for sensor start up (> 1000 ms according to datasheet)
 time.sleep(1)
 
+# start scd measurement in periodic mode, will update every 2 s
 msg = i2c_msg.write(DEVICE_ADDR, [0x00, 0x21])
 bus.i2c_rdwr(msg)
 
+# wait for first measurement to be finished
 time.sleep(2)
 
+# repeat read out of sensor data
+
 print("pm1p0 \t pm2p5 \t pm4p0 \t pm10p0\t voc \t nox \t temperature\t humidity")
-for i in range(1000):
+data_list = []
+num_measurements = 1000
+json_filename = "sensor_data.json"
+
+for i in range(num_measurements):
     msg = i2c_msg.write(DEVICE_ADDR, [0x03, 0xC4])
     bus.i2c_rdwr(msg)
 
+    # wait 1 ms for data ready
     time.sleep(0.001)
 
     msg = i2c_msg.read(DEVICE_ADDR, 24)
@@ -31,40 +46,33 @@ for i in range(1000):
     pm2p5 = (msg.buf[3][0] << 8 | msg.buf[4][0])/10
     pm4p0 = (msg.buf[6][0] << 8 | msg.buf[7][0])/10
     pm10p0 = (msg.buf[9][0] << 8 | msg.buf[10][0])/10
-
-    temperature = msg.buf[15][0] << 8 | msg.buf[16][0]
-    temperature /= 200
-
-    humidity = msg.buf[12][0] << 8 | msg.buf[13][0]
-    humidity /= 100
-
+    temperature = (msg.buf[15][0] << 8 | msg.buf[16][0]) / 200
+    humidity = (msg.buf[12][0] << 8 | msg.buf[13][0]) / 100
     voc = (msg.buf[18][0] << 8 | msg.buf[19][0]) / 10
     nox = (msg.buf[21][0] << 8 | msg.buf[22][0]) / 10
-    
-    now_time = datetime.datetime.now()
-    data_time = str(now_time.month) + "/" + str(now_time.day) + "::" + str(now_time.hour) + ":" + str(now_time.minute)
-    data = {
-        "time" : data_time,
-        "pm1p0" : pm1p0,
-        "pm2p5" : pm2p5,
-        "pm4p0" : pm4p0,
-        "pm10p0" : pm10p0,
-        "temperature" : temperature,
-        "humidity" : humidity,
-        "voc" : voc,
-        "nox" : nox
-        }
-        
-    with open('bee_data.csv', 'a', newline='') as csvfile:
-        fieldnames = ["time", "pm1p0", "pm2p5", "pm4p0", "pm10p0", "temperature", "humidity", "voc", "nox"]
-        writer = csv.DictWriter(csvfile, fieldnames = fieldnames)
-        writer.writerow(data)
-    with open("bee_data.jl", "a") as f:
-        f.write(json.dumps(data) + "\n")
+
     print("{:.2f} \t {:.2f} \t {:.2f} \t {:.2f} \t {:.0f} \t {:.0f} \t {:.2f} \t\t {:.2f}".format(pm1p0, pm2p5, pm4p0, pm10p0, voc, nox, temperature, humidity))
 
+    # Prepare data for JSON
+    data = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "pm1p0": pm1p0,
+        "pm2p5": pm2p5,
+        "pm4p0": pm4p0,
+        "pm10p0": pm10p0,
+        "voc": voc,
+        "nox": nox,
+        "temperature": temperature,
+        "humidity": humidity
+    }
+    data_list.append(data)
 
-    time.sleep(2)
+    # Write to JSON file after each measurement
+    with open(json_filename, "w") as f:
+        json.dump(data_list, f, indent=2)
+
+    # wait 10 s for next measurement
+    time.sleep(10)
 
 
 
