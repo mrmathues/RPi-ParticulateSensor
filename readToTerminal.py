@@ -33,6 +33,62 @@ json_filename = "sensor_data.json"
 NOTECARD_PORT = os.getenv('NOTECARD_PORT', '/dev/ttyAMA0')
 NOTECARD_BAUD = int(os.getenv('NOTECARD_BAUD', '9600'))
 NOTECARD_PUSH_INTERVAL = int(os.getenv('NOTECARD_PUSH_INTERVAL', str(10 * 60)))
+# If NOTECARD_AUTODETECT is '1' (default), the script will scan typical serial device names
+# and attempt them if the configured NOTECARD_PORT does not exist.
+NOTECARD_AUTODETECT = os.getenv('NOTECARD_AUTODETECT', '1') == '1'
+
+# Notecard interface: 'serial' (default) or 'i2c'
+# If using I2C, set NOTECARD_IFACE=i2c and provide NOTECARD_I2C_ADDR (e.g. 0x15)
+NOTECARD_IFACE = os.getenv('NOTECARD_IFACE', 'serial')
+# default Notecard I2C address (user provided): 0x17
+NOTECARD_I2C_ADDR = os.getenv('NOTECARD_I2C_ADDR', '0x17')
+if NOTECARD_I2C_ADDR:
+    try:
+        # allow hex like 0x15
+        NOTECARD_I2C_ADDR = int(NOTECARD_I2C_ADDR, 0)
+    except Exception:
+        NOTECARD_I2C_ADDR = None
+else:
+    NOTECARD_I2C_ADDR = None
+
+
+def list_candidate_serial_ports():
+    """Return a list of candidate serial device paths to try (in order).
+
+    This checks common Linux device patterns used on Raspberry Pi and USB serial adapters.
+    """
+    candidates = []
+    # include configured port first
+    if NOTECARD_PORT:
+        candidates.append(NOTECARD_PORT)
+
+    # common Linux tty names for USB-serial and serial adapters
+    common = [
+        '/dev/ttyAMA0',
+        '/dev/serial0',
+        '/dev/ttyS0',
+        '/dev/ttyUSB0',
+        '/dev/ttyUSB1',
+        '/dev/ttyACM0',
+        '/dev/ttyACM1',
+        '/dev/ttyACM2',
+    ]
+    for p in common:
+        if p not in candidates:
+            candidates.append(p)
+
+    # also add anything that looks like /dev/ttyUSB* or /dev/ttyACM*
+    try:
+        for name in os.listdir('/dev'):
+            if name.startswith('ttyUSB') or name.startswith('ttyACM'):
+                p = os.path.join('/dev', name)
+                if p not in candidates:
+                    candidates.append(p)
+    except Exception:
+        # non-linux or permission issue, ignore
+        pass
+
+    return candidates
 
 
 def send_file_to_notecard(path, port=NOTECARD_PORT, baud=NOTECARD_BAUD, timeout=10):
@@ -44,25 +100,92 @@ def send_file_to_notecard(path, port=NOTECARD_PORT, baud=NOTECARD_BAUD, timeout=
     if not os.path.exists(path):
         return False, f"file not found: {path}"
 
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            payload = f.read()
+    with open(path, 'r', encoding='utf-8') as f:
+        payload = f.read()
 
-        req = {
-            "req": "card.write",
-            "body": {
-                "file": os.path.basename(path),
-                "data": payload
-            }
+    req = {
+        "req": "card.write",
+        "body": {
+            "file": os.path.basename(path),
+            "data": payload,
         }
+    }
 
-        ser = serial.Serial(port, baud, timeout=timeout)
-        ser.write((json.dumps(req) + "\n").encode('utf-8'))
-        resp = ser.readline().decode('utf-8').strip()
-        ser.close()
-        return True, resp
-    except Exception as e:
-        return False, str(e)
+    # If I2C interface requested, attempt to send over I2C using the existing SMBus
+    if NOTECARD_IFACE.lower() == 'i2c':
+        if NOTECARD_I2C_ADDR is None:
+            return False, "NOTECARD_I2C_ADDR not set (required for I2C interface)"
+
+        # We'll write the JSON request in small chunks (SMBus block limits). The exact
+        # Notecard I2C protocol depends on Notecard firmware; here we make a conservative
+        # attempt by writing raw bytes to the target I2C address. If your Notecard uses a
+        # specific register or framing bytes, adjust this implementation accordingly.
+        data_bytes = (json.dumps(req) + "\n").encode('utf-8')
+        chunk_size = 28  # small chunk to be safe for SMBus transfers
+        offset = 0
+        tried = []
+        try:
+            while offset < len(data_bytes):
+                chunk = data_bytes[offset:offset+chunk_size]
+                msg = i2c_msg.write(NOTECARD_I2C_ADDR, list(chunk))
+                bus.i2c_rdwr(msg)
+                offset += len(chunk)
+
+            # Attempt to read a short response (this depends on Notecard behavior)
+            # Read up to 256 bytes (may return shorter). If Notecard doesn't support
+            # readback over I2C, this will likely raise an exception which we catch.
+            try:
+                rlen = 256
+                rmsg = i2c_msg.read(NOTECARD_I2C_ADDR, rlen)
+                bus.i2c_rdwr(rmsg)
+                # rmsg.buf is a sequence of bytearrays
+                resp_bytes = b''.join([bytes(x) for x in rmsg.buf])
+                resp_text = resp_bytes.decode('utf-8', errors='replace').strip()
+                return True, f"i2c:{hex(NOTECARD_I2C_ADDR)} response: {resp_text}"
+            except Exception as e_read:
+                # no readable response — still consider write success, return write info
+                return True, f"i2c:{hex(NOTECARD_I2C_ADDR)} write OK, no read response: {e_read}"
+        except Exception as e:
+            return False, f"i2c write failed to {hex(NOTECARD_I2C_ADDR)}: {e}"
+
+    # Fallback to serial if NOTECARD_IFACE is not i2c
+
+    tried = []
+
+    def try_port(p):
+        try:
+            ser = serial.Serial(p, baud, timeout=timeout)
+            ser.write((json.dumps(req) + "\n").encode('utf-8'))
+            resp = ser.readline().decode('utf-8').strip()
+            ser.close()
+            return True, resp
+        except Exception as e:
+            return False, str(e)
+
+    # If configured port exists, try it first
+    if os.path.exists(port):
+        success, resp = try_port(port)
+        if success:
+            return True, resp
+        else:
+            tried.append((port, resp))
+
+    # If auto-detect enabled, scan candidate ports and try each
+    if NOTECARD_AUTODETECT:
+        for candidate in list_candidate_serial_ports():
+            # skip the configured port already tried
+            if candidate == port:
+                continue
+            success, resp = try_port(candidate)
+            if success:
+                return True, f"used {candidate}: {resp}"
+            tried.append((candidate, resp))
+
+    # none succeeded
+    msg_lines = [f"Tried {len(tried)} ports:"]
+    for p, r in tried:
+        msg_lines.append(f" - {p}: {r}")
+    return False, "; ".join(msg_lines)
 
 
 def periodic_notecard_sender(stop_event, path=json_filename, interval=NOTECARD_PUSH_INTERVAL):
