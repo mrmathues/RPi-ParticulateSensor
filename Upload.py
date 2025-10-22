@@ -4,7 +4,6 @@ import time
 import json
 from smbus2 import SMBus, i2c_msg
 from notecard import notecard
-from periphery import Serial
 from periphery import I2C
 
 # I2C bus 1 on a Raspberry Pi 3B+
@@ -46,8 +45,9 @@ data_list = []
 num_measurements = 1000
 json_filename = "sensor_data.json"
 
-# Send data to NoteHub every 10 minutes
-send_interval = 10 * 60  # 10 minutes in seconds
+# Send data to NoteHub every 2 minutes
+send_interval = 2 * 60  # 2 minutes in seconds
+last_send = time.time()
 
 for i in range(num_measurements):
     msg = i2c_msg.write(DEVICE_ADDR, [0x03, 0xC4])
@@ -84,32 +84,31 @@ for i in range(num_measurements):
         "humidity": humidity
     }
     data_list.append(data)
+    # Write to JSON file after each measurement (optional local persistence)
+    # with open(json_filename, "w") as f:
+    #     json.dump(data_list, f, indent=2)
 
-    # Write to JSON file after each measurement
-    #with open(json_filename, "w") as f:
-    #    json.dump(data_list, f, indent=2)
-    #marking first 100 points as test data
-    if i <= 100:
-         card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
-                    "pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox,
-                    "tag":"t-data"}})
-    else:
-         card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
-                    "pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox,
-                    "tag":"u-data"}})
-
-    # Send data to NoteHub every 10 minutes
-    if i % (send_interval // 12) == 0 && i != 0:  # Assuming measurements are taken every 10 seconds
-        card.Transaction({"req": "hub.sync"})
-        #with open(json_filename, "r") as f:
-       # json_data = f.read()
-        #card.Transaction({"req": "note.add", "file": "sensor.qo", "body": json.loads(json_data)})
+    # Upload the entire data_list to NoteHub when the send interval elapses
+    # Use elapsed wall-clock time so the logic works regardless of measurement spacing
+    if time.time() - last_send >= send_interval and len(data_list) > 0:
+        try:
+            upload_count = len(data_list)
+            # Send the whole data_list as a single Note (body contains the list)
+            card.Transaction({"req": "note.add", "body": {"measurements": data_list}})
+            # Trigger a sync to push the note to NoteHub
+            card.Transaction({"req": "hub.sync"})
+            # Clear the list after successful upload to avoid resending
+            data_list = []
+            last_send = time.time()
+            print(f"Uploaded {upload_count} measurements to NoteHub")
+        except Exception as e:
+            print("Failed to upload data to NoteHub:", e)
 
     #card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
                     #"pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox}})
     #card.Transaction({"req": "hub.sync"})
     # wait 10 s for next measurement
-    time.sleep(600)
+    time.sleep(10)
 
 
 
