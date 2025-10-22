@@ -86,17 +86,28 @@ for i in range(num_measurements):
     data_list.append(data)
 
     # Write to JSON file after each measurement
-    with open(json_filename, "w") as f:
-        json.dump(data_list, f, indent=2)
+    #with open(json_filename, "w") as f:
+    #    json.dump(data_list, f, indent=2)
+    #marking first 100 points as test data
+    if i <= 100:
+         card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
+                    "pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox,
+                    "tag":"t-data"}})
+    else:
+         card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
+                    "pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox,
+                    "tag":"u-data"}})
 
     # Send data to NoteHub every 10 minutes
-    #if i % (send_interval // 10) == 0:  # Assuming measurements are taken every 10 seconds
-    with open(json_filename, "r") as f:
-        json_data = f.read()
+    if i % (send_interval // 12) == 0 && i != 0:  # Assuming measurements are taken every 10 seconds
+        card.Transaction({"req": "hub.sync"})
+        #with open(json_filename, "r") as f:
+       # json_data = f.read()
         #card.Transaction({"req": "note.add", "file": "sensor.qo", "body": json.loads(json_data)})
-    card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
-                    "pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox}})
-    card.Transaction({"req": "hub.sync"})
+
+    #card.Transaction({"req":"note.add","body":{"temp":temperature,"humid":humidity, "timestamp":tmstamp, 
+                    #"pm1p0":pm1p0, "pm2p5":pm2p5, "pm4p0":pm4p0, "pm10p0":pm10p0, "voc":voc, "nox":nox}})
+    #card.Transaction({"req": "hub.sync"})
     # wait 10 s for next measurement
     time.sleep(600)
 
